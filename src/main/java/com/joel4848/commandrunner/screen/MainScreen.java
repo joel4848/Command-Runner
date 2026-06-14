@@ -115,12 +115,17 @@ public class MainScreen extends Screen {
         tebBottom = h - PADDING - BUTTON_HEIGHT - PADDING;
         tebWidth  = w - PADDING * 2;
 
+        String preservedText = (this.teb != null) ? this.teb.getText() : "";
+
         teb = new EditBoxWidget(textRenderer,
                 tebLeft, tebTop, tebWidth, tebBottom - tebTop,
                 Text.literal("Enter commands here - one per line"),
                 Text.literal(""));
         teb.setMaxLength(Integer.MAX_VALUE / 2);
-        if (pendingContent != null) {
+
+        if (!preservedText.isEmpty()) {
+            teb.setText(preservedText);
+        } else if (pendingContent != null) {
             teb.setText(pendingContent);
             pendingContent = null;
         }
