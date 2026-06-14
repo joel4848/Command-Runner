@@ -54,9 +54,8 @@ public class MainScreen extends Screen {
     private String pendingContent   = null;
 
     // Widgety bois
-    private TextFieldWidget titleBox;
     private EditBoxWidget   teb;
-    private ButtonWidget    clearBtn, loadBtn, saveBtn, scheduleBtn, runBtn, closeBtn;
+    private ButtonWidget    newBtn, loadBtn, saveBtn, scheduleBtn, runBtn, closeBtn;
 
     // TEB geometry bits ('TEB' = the Text Entry Box; we're best buds now)
     private int tebLeft, tebTop, tebBottom, tebWidth;
@@ -102,13 +101,6 @@ public class MainScreen extends Screen {
         addDrawableChild(closeBtn);
 
         int titleW = w - PADDING * 3 - CLOSE_BTN_SIZE;
-        titleBox = new TextFieldWidget(textRenderer, PADDING, PADDING, titleW, TITLE_BOX_HEIGHT,
-                Text.literal("Preset Name"));
-        titleBox.setMaxLength(128);
-        titleBox.setPlaceholder(
-                Text.literal(PLACEHOLDER).formatted(net.minecraft.util.Formatting.DARK_GRAY));
-        if (loadedPresetName != null) titleBox.setText(loadedPresetName);
-        addDrawableChild(titleBox);
 
         tebLeft   = PADDING;
         tebTop    = PADDING + TITLE_BOX_HEIGHT + PADDING;
@@ -150,11 +142,13 @@ public class MainScreen extends Screen {
         btnX[0] = PADDING;
         for (int i = 1; i < btnCount; i++) btnX[i] = btnX[i - 1] + btnW + gap;
 
-        clearBtn = ButtonWidget.builder(Text.literal("Clear"), btn -> {
+        newBtn = ButtonWidget.builder(Text.literal("New"), btn -> {
             suppressChangeListener = true;
             teb.setText("");
             suppressChangeListener = false;
-            titleBox.setText("");
+
+            loadedPresetName = null;
+
             warningMessage = null;
             closeDropdown();
         }).dimensions(btnX[0], btnY, btnW, BUTTON_HEIGHT).build();
@@ -167,9 +161,11 @@ public class MainScreen extends Screen {
                 .dimensions(btnX[2], btnY, btnW, BUTTON_HEIGHT).build();
 
         scheduleBtn = ButtonWidget.builder(Text.literal("Schedule"), btn -> {
-            String name = getPresetName();
-            if (name == null) showWarning("You must enter a name for the preset first!");
-            else MinecraftClient.getInstance().setScreen(new ScheduleScreen(this, name));
+            if (loadedPresetName == null) {
+                showWarning("You must save the preset before scheduling it!");
+            } else {
+                MinecraftClient.getInstance().setScreen(new ScheduleScreen(this, loadedPresetName));
+            }
         }).dimensions(btnX[3], btnY, btnW, BUTTON_HEIGHT).build();
 
         runBtn = ButtonWidget.builder(Text.literal("Run"), btn -> {
@@ -177,7 +173,7 @@ public class MainScreen extends Screen {
             if (!text.isBlank()) { close(); CommandExecutor.runAll(text); }
         }).dimensions(btnX[4], btnY, btnW, BUTTON_HEIGHT).build();
 
-        addDrawableChild(clearBtn);
+        addDrawableChild(newBtn);
         addDrawableChild(loadBtn);
         addDrawableChild(saveBtn);
         addDrawableChild(scheduleBtn);
@@ -359,13 +355,19 @@ public class MainScreen extends Screen {
 
     // Helper bois
     private void handleSave() {
-        String name = getPresetName();
-        if (name == null) { showWarning("You must enter a name for the preset!"); return; }
-        if (PresetManager.exists(name) && !name.equalsIgnoreCase(loadedPresetName)) {
-            showWarning("This name is already in use!"); return;
+        String textToSave = teb.getText();
+
+        // New/unsaved presets open the save as screen
+        if (loadedPresetName == null) {
+            this.client.setScreen(new SaveAsScreen(this, textToSave, savedName -> {
+                this.loadedPresetName = savedName;
+                com.joel4848.commandrunner.schedule.ScheduleManager.reloadSchedules();
+            }));
+            return;
         }
-        if (PresetManager.save(name, teb.getText())) {
-            loadedPresetName = name;
+
+        // Otherwise, we just overwrite the bastards
+        if (PresetManager.save(loadedPresetName, textToSave)) {
             showWarning("Saved!");
             com.joel4848.commandrunner.schedule.ScheduleManager.reloadSchedules();
         } else {
@@ -373,12 +375,7 @@ public class MainScreen extends Screen {
         }
     }
 
-    private String getPresetName() {
-        String t = titleBox.getText().trim();
-        return (t.isEmpty() || t.equals(PLACEHOLDER)) ? null : t;
-    }
-
-    private void showWarning(String msg) {
+    void showWarning(String msg) {
         warningMessage = Text.literal(msg);
         warningTimer   = 80;
     }
@@ -394,6 +391,10 @@ public class MainScreen extends Screen {
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         renderBackground(context, mouseX, mouseY, delta);
         super.render(context, mouseX, mouseY, delta);
+
+        // Draw the dynamic, read-only editing status text label cleanly inside the title lane
+        String statusText = (loadedPresetName != null) ? "Editing: " + loadedPresetName : "Editing: (Unsaved preset)";
+        context.drawTextWithShadow(textRenderer, Text.literal(statusText), PADDING + 2, PADDING + 4, 0xFFFFFFFF);
 
         // I hated this
         if (dropdownOpen && !suggestions.isEmpty() && !cycling) {
