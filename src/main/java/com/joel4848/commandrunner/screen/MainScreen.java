@@ -13,7 +13,6 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.EditBoxWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.command.CommandSource;
 import net.minecraft.text.Text;
@@ -23,6 +22,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+
+import static net.minecraft.client.gui.EditBox.UNLIMITED_LENGTH;
 
 // Why
 
@@ -92,9 +93,19 @@ public class MainScreen extends Screen {
     // Init bits
     @Override
     protected void init() {
+        int HELP_BTN_SIZE = 20;
+        int controlGap = 4;
+
         int w = this.width;
         int h = this.height;
 
+        // Help screen opener button
+        ButtonWidget helpBtn = ButtonWidget.builder(Text.literal("?"), btn ->
+                MinecraftClient.getInstance().setScreen(new HelpScreen(this))
+        ).dimensions(w - PADDING - CLOSE_BTN_SIZE - controlGap - HELP_BTN_SIZE, PADDING, HELP_BTN_SIZE, HELP_BTN_SIZE).build();
+        addDrawableChild(helpBtn);
+
+        // Close button
         closeBtn = ButtonWidget.builder(Text.literal("✕"), btn -> close())
                 .dimensions(w - PADDING - CLOSE_BTN_SIZE, PADDING, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE)
                 .build();
@@ -113,7 +124,7 @@ public class MainScreen extends Screen {
                 tebLeft, tebTop, tebWidth, tebBottom - tebTop,
                 Text.literal("Enter commands here - one per line"),
                 Text.literal(""));
-        teb.setMaxLength(Integer.MAX_VALUE / 2);
+        teb.setMaxLength(UNLIMITED_LENGTH);
 
         if (!preservedText.isEmpty()) {
             teb.setText(preservedText);
