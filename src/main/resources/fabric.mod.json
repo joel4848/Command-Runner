@@ -8,7 +8,7 @@
     "joel4848"
   ],
   "contact": {},
-  "license": "CC0-1.0",
+  "license": "CC BY-NC-SA 4.0",
   "icon": "assets/command-runner/icon.png",
   "environment": "client",
   "entrypoints": {
@@ -21,7 +21,7 @@
   ],
   "depends": {
     "fabricloader": ">=0.18.0",
-    "minecraft": "~1.21.1",
+    "minecraft": "1.21.1",
     "java": ">=21",
     "fabric-api": "*"
   }
