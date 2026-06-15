@@ -41,7 +41,7 @@ public class MainScreen extends Screen {
     private static final int DROPDOWN_ROW_H    = 12;
     private static final int DROPDOWN_PAD      = 3;
     private static final int DROPDOWN_MAX_ROWS = 10;
-    private static final int COL_BG            = 0xC0101010;
+    private static final int COL_BG            = 0xFF101010;
     private static final int COL_SELECTED_BG   = 0xFF1A3A6A;
     private static final int COL_TEXT          = 0xFCFC00;
     private static final int COL_SUFFIX        = 0xFCFC00;
@@ -451,6 +451,9 @@ public class MainScreen extends Screen {
         int ddX  = b[0], ddY = b[1], ddW = b[2], ddH = b[3];
         int rows = Math.min(suggestions.size(), DROPDOWN_MAX_ROWS);
 
+        context.getMatrices().push();
+        context.getMatrices().translate(0, 0, 300.0F);
+
         context.fill(ddX, ddY, ddX + ddW, ddY + ddH, COL_BG);
         context.drawBorder(ddX, ddY, ddW, ddH, COL_BORDER);
 
@@ -479,6 +482,7 @@ public class MainScreen extends Screen {
             context.drawTextWithShadow(textRenderer, Text.literal(suffix),
                     textX + textRenderer.getWidth(typed), textY, COL_SUFFIX);
         }
+        context.getMatrices().pop();
     }
 
     @Override
