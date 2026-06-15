@@ -3,7 +3,7 @@
   "id": "command-runner",
   "version": "${version}",
   "name": "Command Runner",
-  "description": "Bulk-run commands",
+  "description": "Easily bulk-run, schedule, save and load lists of commands.",
   "authors": [
     "joel4848"
   ],

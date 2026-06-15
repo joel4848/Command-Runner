@@ -50,12 +50,11 @@ public class MainScreen extends Screen {
     private static final int COL_GHOST_TEXT    = -8355712; // Vanilla Dark Gray
     private static final int COL_SYNTAX_ERROR  = 0xFFFF5555; // Vanilla Error Red
 
-    // Persistent state
-    private String loadedPresetName = null;
-    private String pendingContent   = null;
+    public String loadedPresetName = null;
+    public String pendingContent   = null;
 
     // Widgety bois
-    private EditBoxWidget   teb;
+    public EditBoxWidget   teb;
     private ButtonWidget    newBtn, loadBtn, saveBtn, scheduleBtn, runBtn, closeBtn;
 
     // TEB geometry bits ('TEB' = the Text Entry Box; we're best buds now)
