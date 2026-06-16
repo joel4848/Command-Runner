@@ -2,83 +2,37 @@ package com.joel4848.commandrunner.screen;
 
 import com.joel4848.commandrunner.CommandExecutor;
 import com.joel4848.commandrunner.config.PresetManager;
-import com.mojang.brigadier.CommandDispatcher;
-import com.mojang.brigadier.ParseResults;
-import com.mojang.brigadier.StringReader;
-import com.mojang.brigadier.exceptions.CommandSyntaxException;
-import com.mojang.brigadier.suggestion.Suggestion;
-import com.mojang.brigadier.suggestion.Suggestions;
+import com.joel4848.commandrunner.ui.CommandSuggestor;
+import com.joel4848.commandrunner.ui.CommandTextField;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.EditBoxWidget;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
-import net.minecraft.command.CommandSource;
 import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-
-import static net.minecraft.client.gui.EditBox.UNLIMITED_LENGTH;
-
-// Why
-
 public class MainScreen extends Screen {
 
-    // Layout
-    private static final int PADDING          = 8;
-    private static final int TITLE_BOX_HEIGHT = 20;
-    private static final int BUTTON_HEIGHT    = 20;
-    private static final int CLOSE_BTN_SIZE   = 20;
-    private static final String PLACEHOLDER   = "(Enter New Preset Name)";
-    private static final int LINE_H           = 12;
-
-    // Dropdown appearance
-    private static final int DROPDOWN_ROW_H    = 12;
-    private static final int DROPDOWN_PAD      = 3;
-    private static final int DROPDOWN_MAX_ROWS = 10;
-    private static final int COL_BG            = 0xFF101010;
-    private static final int COL_SELECTED_BG   = 0xFF1A3A6A;
-    private static final int COL_TEXT          = 0xFCFC00;
-    private static final int COL_SUFFIX        = 0xFCFC00;
-    private static final int COL_BORDER        = 0xFF555555;
-
-    private static final int COL_GHOST_TEXT    = -8355712; // Vanilla Dark Gray
-    private static final int COL_SYNTAX_ERROR  = 0xFFFF5555; // Vanilla Error Red
+    private static final int PADDING     = 8;
+    private static final int TITLE_BOX_H = 20;
+    private static final int BUTTON_H    = 20;
+    private static final int CLOSE_BTN_W = 20;
 
     public String loadedPresetName = null;
     public String pendingContent   = null;
 
-    // Widgety bois
-    public EditBoxWidget   teb;
-    private ButtonWidget    newBtn, loadBtn, saveBtn, scheduleBtn, runBtn, closeBtn;
+    private CommandTextField tef;
+    private CommandSuggestor suggestor;
 
-    // TEB geometry bits ('TEB' = the Text Entry Box; we're best buds now)
-    private int tebLeft, tebTop, tebBottom, tebWidth;
+    private ButtonWidget newBtn, loadBtn, saveBtn, scheduleBtn, runBtn, closeBtn;
 
-    // Active line tracking
-    private int activeLine = 0;
-
-    private CompletableFuture<Suggestions> pendingSuggestions = null;
-    private List<Suggestion> baseSuggestions        = Collections.emptyList();
-    private List<Suggestion> suggestions            = Collections.emptyList();
-    private String           typedToken             = "";
-    private int              suggestionRangeStart   = 0;
-    private int              selectedSuggestion     = -1;
-    private boolean          dropdownOpen           = false;
-    private boolean          cycling                = false;
-    private boolean          suppressChangeListener = false;
-
-    // Is there a mistake
-    private boolean          currentTokenHasError   = false;
-
-    // Do we warn
     private Text warningMessage = null;
     private int  warningTimer   = 0;
+
+    private int tefLeft, tefTop, tefBottom, tefWidth, tefHeight;
+
+    private boolean suppressSuggestorRefresh = false;
 
     public MainScreen() {
         super(Text.literal("Command Runner"));
@@ -89,86 +43,84 @@ public class MainScreen extends Screen {
         this.pendingContent   = content;
     }
 
-    // Init bits
     @Override
     protected void init() {
-        int HELP_BTN_SIZE = 20;
+        int w = width;
+        int h = height;
         int controlGap = 4;
+        int HELP_BTN_W = 20;
 
-        int w = this.width;
-        int h = this.height;
+        addDrawableChild(ButtonWidget.builder(Text.literal("?"),
+                        btn -> MinecraftClient.getInstance().setScreen(new HelpScreen(this)))
+                .dimensions(w - PADDING - CLOSE_BTN_W - controlGap - HELP_BTN_W, PADDING, HELP_BTN_W, BUTTON_H)
+                .build());
 
-        // Help screen opener button
-        ButtonWidget helpBtn = ButtonWidget.builder(Text.literal("?"), btn ->
-                MinecraftClient.getInstance().setScreen(new HelpScreen(this))
-        ).dimensions(w - PADDING - CLOSE_BTN_SIZE - controlGap - HELP_BTN_SIZE, PADDING, HELP_BTN_SIZE, HELP_BTN_SIZE).build();
-        addDrawableChild(helpBtn);
-
-        // Close button
         closeBtn = ButtonWidget.builder(Text.literal("✕"), btn -> close())
-                .dimensions(w - PADDING - CLOSE_BTN_SIZE, PADDING, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE)
+                .dimensions(w - PADDING - CLOSE_BTN_W, PADDING, CLOSE_BTN_W, BUTTON_H)
                 .build();
         addDrawableChild(closeBtn);
 
-        int titleW = w - PADDING * 3 - CLOSE_BTN_SIZE;
+        tefLeft   = PADDING;
+        tefTop    = PADDING + TITLE_BOX_H + PADDING;
+        tefBottom = h - PADDING - BUTTON_H - PADDING;
+        tefWidth  = w - PADDING * 2;
+        tefHeight = tefBottom - tefTop;
 
-        tebLeft   = PADDING;
-        tebTop    = PADDING + TITLE_BOX_HEIGHT + PADDING;
-        tebBottom = h - PADDING - BUTTON_HEIGHT - PADDING;
-        tebWidth  = w - PADDING * 2;
+        String preservedText = (tef != null) ? tef.getText() : "";
 
-        String preservedText = (this.teb != null) ? this.teb.getText() : "";
+        tef = new CommandTextField(textRenderer, tefLeft, tefTop, tefWidth, tefHeight,
+                Text.literal("Enter commands here - one per line"));
+        tef.setMaxLength(Integer.MAX_VALUE);
+        tef.setDrawsBackground(true);
 
-        teb = new EditBoxWidget(textRenderer,
-                tebLeft, tebTop, tebWidth, tebBottom - tebTop,
-                Text.literal("Enter commands here - one per line"),
-                Text.literal(""));
-        teb.setMaxLength(UNLIMITED_LENGTH);
+        ClientPlayNetworkHandler handler = MinecraftClient.getInstance().getNetworkHandler();
+        if (handler != null) {
+            net.minecraft.client.gui.widget.TextFieldWidget stub =
+                    new net.minecraft.client.gui.widget.TextFieldWidget(
+                            textRenderer, 0, 0, 1, 1, Text.empty());
+            suggestor = new CommandSuggestor(
+                    MinecraftClient.getInstance(), this, stub,
+                    textRenderer, true, true, 0, 10, false,
+                    Integer.MIN_VALUE
+            );
+            suggestor.setWindowActive(true);
+            tef.setCommandSuggestor(suggestor);
+        }
 
         if (!preservedText.isEmpty()) {
-            teb.setText(preservedText);
+            tef.setText(preservedText);
         } else if (pendingContent != null) {
-            teb.setText(pendingContent);
+            tef.setText(pendingContent);
             pendingContent = null;
         }
-        teb.setChangeListener(newText -> {
-            if (suppressChangeListener) return;
 
-            cycling = false;
-
-            int n = 0;
-            for (int i = 0; i < newText.length(); i++) if (newText.charAt(i) == '\n') n++;
-            activeLine = n;
-
-            requestCompletions();
+        tef.setChangedListener(newText -> {
+            if (!suppressSuggestorRefresh) refreshSuggestor();
         });
-        addDrawableChild(teb);
 
-        int btnY   = h - PADDING - BUTTON_HEIGHT;
-        int totalW = w - PADDING * 2;
+        addDrawableChild(tef);
+
+        // Bottom buttons
+        int btnY     = h - PADDING - BUTTON_H;
+        int totalW   = w - PADDING * 2;
         int btnCount = 5, gap = 4;
-        int btnW  = (totalW - gap * (btnCount - 1)) / btnCount;
-        int[] btnX = new int[btnCount];
+        int btnW     = (totalW - gap * (btnCount - 1)) / btnCount;
+        int[] btnX   = new int[btnCount];
         btnX[0] = PADDING;
         for (int i = 1; i < btnCount; i++) btnX[i] = btnX[i - 1] + btnW + gap;
 
         newBtn = ButtonWidget.builder(Text.literal("New"), btn -> {
-            suppressChangeListener = true;
-            teb.setText("");
-            suppressChangeListener = false;
-
+            tef.setText("");
             loadedPresetName = null;
-
             warningMessage = null;
-            closeDropdown();
-        }).dimensions(btnX[0], btnY, btnW, BUTTON_HEIGHT).build();
+        }).dimensions(btnX[0], btnY, btnW, BUTTON_H).build();
 
         loadBtn = ButtonWidget.builder(Text.literal("Load"),
                         btn -> MinecraftClient.getInstance().setScreen(new LoadPresetScreen(this)))
-                .dimensions(btnX[1], btnY, btnW, BUTTON_HEIGHT).build();
+                .dimensions(btnX[1], btnY, btnW, BUTTON_H).build();
 
         saveBtn = ButtonWidget.builder(Text.literal("Save"), btn -> handleSave())
-                .dimensions(btnX[2], btnY, btnW, BUTTON_HEIGHT).build();
+                .dimensions(btnX[2], btnY, btnW, BUTTON_H).build();
 
         scheduleBtn = ButtonWidget.builder(Text.literal("Schedule"), btn -> {
             if (loadedPresetName == null) {
@@ -176,12 +128,12 @@ public class MainScreen extends Screen {
             } else {
                 MinecraftClient.getInstance().setScreen(new ScheduleScreen(this, loadedPresetName));
             }
-        }).dimensions(btnX[3], btnY, btnW, BUTTON_HEIGHT).build();
+        }).dimensions(btnX[3], btnY, btnW, BUTTON_H).build();
 
         runBtn = ButtonWidget.builder(Text.literal("Run"), btn -> {
-            String text = teb.getText();
+            String text = tef.getText();
             if (!text.isBlank()) { close(); CommandExecutor.runAll(text); }
-        }).dimensions(btnX[4], btnY, btnW, BUTTON_HEIGHT).build();
+        }).dimensions(btnX[4], btnY, btnW, BUTTON_H).build();
 
         addDrawableChild(newBtn);
         addDrawableChild(loadBtn);
@@ -189,194 +141,119 @@ public class MainScreen extends Screen {
         addDrawableChild(scheduleBtn);
         addDrawableChild(runBtn);
 
-        setInitialFocus(teb);
+        setInitialFocus(tef);
+        refreshSuggestor();
+        tef.forceRefreshSuggestorPos();
     }
 
-    // Autocomplete stuff
-    private String getLine(int index) {
-        String[] lines = teb.getText().split("\n", -1);
-        return (index >= 0 && index < lines.length) ? lines[index] : "";
+    // Suggester (NOT 'suggestor' cmon Mojang)
+    private void refreshSuggestor() {
+        if (suggestor == null || MinecraftClient.getInstance().getNetworkHandler() == null) return;
+        primeSuggestorTextField(tef.getActiveLineRaw());
+        suggestor.refresh();
+        tef.onSuggestorRefreshed();
     }
 
-    private String toCmd(String line) {
-        return line.startsWith("/") ? line.substring(1) : line;
+    private void primeSuggestorTextField(String text) {
+        try {
+            com.joel4848.commandrunner.mixin.TextFieldWidgetAccessor tfAccessor =
+                    (com.joel4848.commandrunner.mixin.TextFieldWidgetAccessor)
+                            ((com.joel4848.commandrunner.mixin.CommandSuggestorAccessor) suggestor).getTextField();
+            tfAccessor.setTextVariable(text);
+            tfAccessor.setSelectionStart(text.length());
+            tfAccessor.setSelectionEnd(text.length());
+        } catch (Exception ignored) {}
     }
 
-    private void requestCompletions() {
-        String line = getLine(activeLine);
-        String cmd  = toCmd(line);
-
-        int lastSpace = cmd.lastIndexOf(' ');
-        if (lastSpace >= 0) {
-            typedToken           = cmd.substring(lastSpace + 1);
-            suggestionRangeStart = lastSpace + 1;
-            fetchFor(cmd.substring(0, lastSpace + 1), cmd);
-        } else {
-            typedToken           = cmd;
-            suggestionRangeStart = 0;
-            fetchFor("", cmd);
+    // Input
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            close();
+            return true;
         }
-    }
 
-    private void fetchFor(String base, String fullLineCmd) {
-        ClientPlayNetworkHandler handler = MinecraftClient.getInstance().getNetworkHandler();
-        if (handler == null) { closeDropdown(); return; }
+        if (keyCode == GLFW.GLFW_KEY_TAB) {
+            if (suggestor != null) {
+                primeSuggestorTextField(tef.getActiveLineRaw());
 
-        CommandDispatcher<CommandSource> dispatcher = handler.getCommandDispatcher();
-        CommandSource source = handler.getCommandSource();
+                suppressSuggestorRefresh = true;
+                boolean handled = suggestor.keyPressed(keyCode, scanCode, modifiers);
+                suppressSuggestorRefresh = false;
+                if (handled) {
+                    syncSuggestorCompletionToTef();
+                }
+            }
+            return true;
+        }
 
-        pendingSuggestions = null;
-
-        ParseResults<CommandSource> parse = dispatcher.parse(new StringReader(fullLineCmd), source);
-
-        currentTokenHasError = false;
-        for (Map.Entry<?, CommandSyntaxException> entry : parse.getExceptions().entrySet()) {
-            int cursorErrorIdx = entry.getValue().getCursor();
-            if (cursorErrorIdx >= suggestionRangeStart) {
-                currentTokenHasError = true;
-                break;
+        if (keyCode == GLFW.GLFW_KEY_UP || keyCode == GLFW.GLFW_KEY_DOWN) {
+            if (suggestor != null && suggestor.keyPressed(keyCode, scanCode, modifiers)) {
+                return true;
             }
         }
 
-        CompletableFuture<Suggestions> future =
-                dispatcher.getCompletionSuggestions(parse, base.length());
-
-        pendingSuggestions = future;
-        future.thenAccept(s -> {
-            if (future != pendingSuggestions) return;
-            baseSuggestions = s.getList().stream()
-                    .filter(sg -> !sg.getText().isEmpty())
-                    .toList();
-            applyTokenFilter();
-        });
+        return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
-    private void applyTokenFilter() {
-        String lower = typedToken.toLowerCase();
-        suggestions = baseSuggestions.stream()
-                .filter(sg -> sg.getText().toLowerCase().startsWith(lower))
-                .toList();
-        if (suggestions.isEmpty()) {
-            dropdownOpen       = false;
-            selectedSuggestion = -1;
-        } else {
-            dropdownOpen = true;
-            if (!cycling) {
-                selectedSuggestion = -1;
-            } else {
-                selectedSuggestion = Math.min(selectedSuggestion, suggestions.size() - 1);
+    private void syncSuggestorCompletionToTef() {
+        if (suggestor == null) return;
+        try {
+            com.joel4848.commandrunner.mixin.TextFieldWidgetAccessor tfAccessor =
+                    (com.joel4848.commandrunner.mixin.TextFieldWidgetAccessor)
+                            ((com.joel4848.commandrunner.mixin.CommandSuggestorAccessor) suggestor).getTextField();
+            String completed = tfAccessor.getText();
+            String current = tef.getActiveLineRaw();
+            if (!completed.equals(current)) {
+                replaceActiveLine(completed);
             }
+        } catch (Exception ignored) {}
+    }
+
+    private void replaceActiveLine(String newLineText) {
+        String fullText = tef.getText();
+        String[] lines = fullText.split("\n", -1);
+        int active = tef.getActiveLine();
+        if (active < 0 || active >= lines.length) return;
+        lines[active] = newLineText;
+        String newText = String.join("\n", lines);
+
+        int newCursor = 0;
+        for (int i = 0; i < active; i++) newCursor += lines[i].length() + 1;
+        newCursor += newLineText.length();
+
+        suppressSuggestorRefresh = true;
+        tef.setText(newText);
+        tef.setCursor(newCursor, false);
+        suppressSuggestorRefresh = false;
+
+        tef.onSuggestorRefreshed();
+    }
+
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (suggestor != null && suggestor.mouseClicked(mouseX, mouseY, button)) {
+            syncSuggestorCompletionToTef();
+            return true;
         }
+        return super.mouseClicked(mouseX, mouseY, button);
     }
 
-    private void closeDropdown() {
-        dropdownOpen         = false;
-        baseSuggestions      = Collections.emptyList();
-        suggestions          = Collections.emptyList();
-        typedToken           = "";
-        selectedSuggestion   = -1;
-        pendingSuggestions   = null;
-        cycling              = false;
-        currentTokenHasError = false;
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
     }
 
-    private void previewSuggestion(int index) {
-        if (index < 0 || index >= suggestions.size()) return;
-        Suggestion s      = suggestions.get(index);
-        String[] lines    = teb.getText().split("\n", -1);
-        int      idx      = Math.min(activeLine, lines.length - 1);
-        String   line     = lines[idx];
-        boolean  hadSlash = line.startsWith("/");
-        String   cmd      = toCmd(line);
-
-        String newCmd = cmd.substring(0, suggestionRangeStart) + s.getText();
-        lines[idx]    = (hadSlash ? "/" : "") + newCmd;
-
-        suppressChangeListener = true;
-        teb.setText(String.join("\n", lines));
-        suppressChangeListener = false;
-    }
-
-    private void acceptSuggestion(int index) {
-        if (index < 0 || index >= suggestions.size()) return;
-        Suggestion s      = suggestions.get(index);
-        String[] lines    = teb.getText().split("\n", -1);
-        int      idx      = Math.min(activeLine, lines.length - 1);
-        String   line     = lines[idx];
-        boolean  hadSlash = line.startsWith("/");
-        String   cmd      = toCmd(line);
-
-        String newCmd = cmd.substring(0, suggestionRangeStart) + s.getText();
-        lines[idx]    = (hadSlash ? "/" : "") + newCmd;
-
-        cycling = false;
-        teb.setText(String.join("\n", lines));
-    }
-
-    // Suggestion dropdown box misery
-    private int activeLineY() {
-        return tebTop + activeLine * LINE_H;
-    }
-
-    private int tokenX() {
-        String line          = getLine(activeLine);
-        boolean hadSlash     = line.startsWith("/");
-        String  cmd          = toCmd(line);
-        String  beforeToken  = cmd.substring(0, Math.min(suggestionRangeStart, cmd.length()));
-        String  displayBefore = (hadSlash ? "/" : "") + beforeToken;
-        return tebLeft + DROPDOWN_PAD + textRenderer.getWidth(displayBefore);
-    }
-
-    private int dropdownWidth() {
-        int maxW = 0;
-        for (Suggestion s : suggestions) maxW = Math.max(maxW, textRenderer.getWidth(s.getText()));
-        int w      = maxW + DROPDOWN_PAD * 2 + 4;
-        int startX = tokenX();
-        return Math.min(w, tebLeft + tebWidth - startX);
-    }
-
-    private int[] dropdownBounds() {
-        int rows  = Math.min(suggestions.size(), DROPDOWN_MAX_ROWS);
-        int ddH   = rows * DROPDOWN_ROW_H + DROPDOWN_PAD * 2;
-        int ddW   = dropdownWidth();
-        int ddX   = tokenX();
-
-        int maxVisibleLines = (tebBottom - tebTop) / (LINE_H - 3);
-        int scrollCeiling   = maxVisibleLines - 2;
-        int effectiveLine   = Math.min(activeLine, scrollCeiling);
-
-        int lineY = tebTop + effectiveLine * LINE_H;
-        lineY -= (effectiveLine - 1) * 3;
-
-        int ddY = (lineY - ddH >= tebTop) ? lineY - ddH : lineY + LINE_H;
-
-        if (lineY - ddH >= tebTop) {
-            ddY += 1;
-        } else {
-            ddY -= 2;
-        }
-
-        if (activeLine > scrollCeiling) {
-            ddY += 2;
-        }
-
-        return new int[]{ddX, ddY, ddW, ddH};
-    }
-
-    // Helper bois
+    // Savey bits
     private void handleSave() {
-        String textToSave = teb.getText();
-
-        // New/unsaved presets open the save as screen
+        String textToSave = tef.getText();
         if (loadedPresetName == null) {
-            this.client.setScreen(new SaveAsScreen(this, textToSave, savedName -> {
+            client.setScreen(new SaveAsScreen(this, textToSave, savedName -> {
                 this.loadedPresetName = savedName;
                 com.joel4848.commandrunner.schedule.ScheduleManager.reloadSchedules();
             }));
             return;
         }
-
-        // Otherwise, we just overwrite the bastards
         if (PresetManager.save(loadedPresetName, textToSave)) {
             showWarning("Saved!");
             com.joel4848.commandrunner.schedule.ScheduleManager.reloadSchedules();
@@ -385,7 +262,7 @@ public class MainScreen extends Screen {
         }
     }
 
-    void showWarning(String msg) {
+    public void showWarning(String msg) {
         warningMessage = Text.literal(msg);
         warningTimer   = 80;
     }
@@ -396,225 +273,24 @@ public class MainScreen extends Screen {
         if (warningTimer > 0 && --warningTimer == 0) warningMessage = null;
     }
 
-    // Rendering misery
+    // Rendery bits
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         renderBackground(context, mouseX, mouseY, delta);
         super.render(context, mouseX, mouseY, delta);
 
-        // Draw the dynamic, read-only editing status text label cleanly inside the title lane
-        String statusText = (loadedPresetName != null) ? "Editing: " + loadedPresetName : "Editing: (Unsaved preset)";
-        context.drawTextWithShadow(textRenderer, Text.literal(statusText), PADDING + 2, PADDING + 4, 0xFFFFFFFF);
-
-        // I hated this
-        if (dropdownOpen && !suggestions.isEmpty() && !cycling) {
-            int activeIndex = Math.max(0, selectedSuggestion);
-            Suggestion topSuggestion = suggestions.get(activeIndex);
-            String fullWord = topSuggestion.getText();
-
-            if (fullWord.toLowerCase().startsWith(typedToken.toLowerCase())) {
-                String ghostSuffix = fullWord.substring(typedToken.length());
-
-                int currentTokenX = tokenX() + textRenderer.getWidth(typedToken) + 1;
-
-                int maxVisibleLines = (tebBottom - tebTop) / (LINE_H - 3);
-                int scrollCeiling   = maxVisibleLines - 2;
-                int effectiveLine   = Math.min(activeLine, scrollCeiling);
-
-                int currentLineY = tebTop + effectiveLine * LINE_H + (LINE_H - textRenderer.fontHeight) / 2;
-                currentLineY -= (effectiveLine - 1) * 3;
-
-                // Also this
-                if (activeLine > scrollCeiling) {
-                    currentLineY += 2;
-                }
-
-                context.drawTextWithShadow(textRenderer, ghostSuffix, currentTokenX, currentLineY, COL_GHOST_TEXT);
-            }
-        }
-
-        if (dropdownOpen && !suggestions.isEmpty()) {
-            context.enableScissor(tebLeft, tebTop, tebLeft + tebWidth, tebBottom);
-            renderDropdown(context, mouseX, mouseY);
-            context.disableScissor();
-        }
+        String statusText = (loadedPresetName != null)
+                ? "Editing: " + loadedPresetName : "Editing: (Unsaved preset)";
+        context.drawTextWithShadow(textRenderer, Text.literal(statusText),
+                PADDING + 2, PADDING + 4, 0xFFFFFFFF);
 
         if (warningMessage != null) {
-            int msgY = height - PADDING - BUTTON_HEIGHT - PADDING - textRenderer.fontHeight - 2;
+            int msgY = height - PADDING - BUTTON_H - PADDING - textRenderer.fontHeight - 2;
             context.drawCenteredTextWithShadow(textRenderer, warningMessage, width / 2, msgY,
                     warningTimer > 0 ? 0xFFFF5555 : 0xFF55FF55);
         }
     }
 
-    private void renderDropdown(DrawContext context, int mouseX, int mouseY) {
-        int[] b  = dropdownBounds();
-        int ddX  = b[0], ddY = b[1], ddW = b[2], ddH = b[3];
-        int rows = Math.min(suggestions.size(), DROPDOWN_MAX_ROWS);
-
-        context.getMatrices().push();
-        context.getMatrices().translate(0, 0, 300.0F);
-
-        context.fill(ddX, ddY, ddX + ddW, ddY + ddH, COL_BG);
-        context.drawBorder(ddX, ddY, ddW, ddH, COL_BORDER);
-
-        int dynamicTextPrefixColor = currentTokenHasError ? COL_SYNTAX_ERROR : COL_TEXT;
-
-        for (int i = 0; i < rows; i++) {
-            int rowY    = ddY + DROPDOWN_PAD + i * DROPDOWN_ROW_H;
-            boolean sel = i == selectedSuggestion;
-            boolean hov = mouseX >= ddX && mouseX < ddX + ddW
-                    && mouseY >= rowY && mouseY < rowY + DROPDOWN_ROW_H;
-
-            if (sel || hov) {
-                context.fill(ddX + 1, rowY, ddX + ddW - 1, rowY + DROPDOWN_ROW_H, COL_SELECTED_BG);
-            }
-
-            Suggestion s    = suggestions.get(i);
-            String     full = s.getText();
-            int tokenLen    = Math.min(typedToken.length(), full.length());
-            String typed    = full.substring(0, tokenLen);
-            String suffix   = full.substring(tokenLen);
-
-            int textX = ddX + DROPDOWN_PAD + 2;
-            int textY = rowY + (DROPDOWN_ROW_H - textRenderer.fontHeight) / 2;
-
-            context.drawTextWithShadow(textRenderer, Text.literal(typed), textX, textY, dynamicTextPrefixColor);
-            context.drawTextWithShadow(textRenderer, Text.literal(suffix),
-                    textX + textRenderer.getWidth(typed), textY, COL_SUFFIX);
-        }
-        context.getMatrices().pop();
-    }
-
     @Override
     public boolean shouldPause() { return false; }
-
-    // Inputy bits
-    @Override
-    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-
-        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-            if (dropdownOpen) { closeDropdown(); return true; }
-            close();
-            return true;
-        }
-
-        if (keyCode == GLFW.GLFW_KEY_TAB) {
-            boolean shift = (modifiers & GLFW.GLFW_MOD_SHIFT) != 0;
-
-            if (!dropdownOpen || suggestions.isEmpty()) {
-                fetchForTab();
-                return true;
-            }
-
-            if (!cycling) {
-                cycling = true;
-                selectedSuggestion = shift ? suggestions.size() - 1 : 0;
-            } else {
-                if (shift) {
-                    selectedSuggestion = (selectedSuggestion <= 0)
-                            ? suggestions.size() - 1 : selectedSuggestion - 1;
-                } else {
-                    selectedSuggestion = (selectedSuggestion + 1) % suggestions.size();
-                }
-            }
-            previewSuggestion(selectedSuggestion);
-            return true;
-        }
-
-        if (keyCode == GLFW.GLFW_KEY_SPACE && cycling) {
-            cycling = false;
-        }
-
-        if (dropdownOpen) {
-            if (keyCode == GLFW.GLFW_KEY_DOWN) {
-                selectedSuggestion = (selectedSuggestion + 1) % suggestions.size();
-                if (cycling) previewSuggestion(selectedSuggestion);
-                return true;
-            }
-            if (keyCode == GLFW.GLFW_KEY_UP) {
-                selectedSuggestion = (selectedSuggestion <= 0)
-                        ? suggestions.size() - 1 : selectedSuggestion - 1;
-                if (cycling) previewSuggestion(selectedSuggestion);
-                return true;
-            }
-        }
-
-        return super.keyPressed(keyCode, scanCode, modifiers);
-    }
-
-    private void fetchForTab() {
-        String line = getLine(activeLine);
-        String cmd  = toCmd(line);
-
-        int lastSpace = cmd.lastIndexOf(' ');
-        String base;
-        if (lastSpace >= 0) {
-            typedToken           = cmd.substring(lastSpace + 1);
-            suggestionRangeStart = lastSpace + 1;
-            base                 = cmd.substring(0, lastSpace + 1);
-        } else {
-            typedToken           = cmd;
-            suggestionRangeStart = 0;
-            base                 = "";
-        }
-
-        ClientPlayNetworkHandler handler = MinecraftClient.getInstance().getNetworkHandler();
-        if (handler == null) return;
-
-        CommandDispatcher<CommandSource> dispatcher = handler.getCommandDispatcher();
-        CommandSource source = handler.getCommandSource();
-
-        pendingSuggestions = null;
-        ParseResults<CommandSource> parse = dispatcher.parse(new StringReader(base), source);
-        CompletableFuture<Suggestions> future =
-                dispatcher.getCompletionSuggestions(parse, base.length());
-
-        pendingSuggestions = future;
-        future.thenAccept(s -> {
-            if (future != pendingSuggestions) return;
-            baseSuggestions = s.getList().stream()
-                    .filter(sg -> !sg.getText().isEmpty())
-                    .toList();
-            String lower = typedToken.toLowerCase();
-            suggestions = baseSuggestions.stream()
-                    .filter(sg -> sg.getText().toLowerCase().startsWith(lower))
-                    .toList();
-            if (!suggestions.isEmpty()) {
-                dropdownOpen       = true;
-                selectedSuggestion = -1;
-                cycling            = false;
-            }
-        });
-    }
-
-    @Override
-    public boolean charTyped(char chr, int modifiers) {
-        return super.charTyped(chr, modifiers);
-    }
-
-    @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (dropdownOpen && !suggestions.isEmpty()) {
-            int[] b  = dropdownBounds();
-            int ddX  = b[0], ddY = b[1], ddW = b[2];
-            int rows = Math.min(suggestions.size(), DROPDOWN_MAX_ROWS);
-            if (mouseX >= ddX && mouseX < ddX + ddW) {
-                for (int i = 0; i < rows; i++) {
-                    int rowY = ddY + DROPDOWN_PAD + i * DROPDOWN_ROW_H;
-                    if (mouseY >= rowY && mouseY < rowY + DROPDOWN_ROW_H) {
-                        acceptSuggestion(i);
-                        return true;
-                    }
-                }
-            }
-            closeDropdown();
-        }
-        return super.mouseClicked(mouseX, mouseY, button);
-    }
-
-    @Override
-    public boolean mouseScrolled(double mouseX, double mouseY,
-                                 double horizontalAmount, double verticalAmount) {
-        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
-    }
 }
