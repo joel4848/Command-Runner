@@ -23,7 +23,7 @@ public class HelpScreen extends Screen {
 
     @Override
     protected void init() {
-        addDrawableChild(ButtonWidget.builder(Text.literal("Back"), btn -> client.setScreen(parent))
+        addDrawableChild(ButtonWidget.builder(Text.literal("Back"), btn -> net.minecraft.client.MinecraftClient.getInstance().setScreen(parent))
                 .dimensions(this.width / 2 - BACK_BTN_W / 2, this.height - PADDING - BACK_BTN_H, BACK_BTN_W, BACK_BTN_H)
                 .build());
 
