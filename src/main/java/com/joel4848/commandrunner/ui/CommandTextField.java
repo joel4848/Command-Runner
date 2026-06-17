@@ -1,6 +1,5 @@
 package com.joel4848.commandrunner.ui;
 
-import com.google.common.collect.Lists;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.MinecraftClient;
@@ -11,7 +10,6 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
 import net.minecraft.util.Pair;
 import net.minecraft.util.StringHelper;
 import net.minecraft.util.Util;
@@ -37,6 +35,9 @@ public class CommandTextField extends TextFieldWidget implements Element {
     private int scrolledLines = 0;
     private int visibleLines = 10;
     private int activeLine = 0;
+    private int scrollX = 0;
+    private static final int SCROLLBAR_WIDTH = 6;
+    private boolean isDraggingScrollbar = false;
 
     private int suggestorAnchorX = -1;
 
@@ -156,9 +157,43 @@ public class CommandTextField extends TextFieldWidget implements Element {
     private void updateSuggestorAnchor() {
         if (suggestor == null) return;
         String line = getActiveLineRaw();
+
+        // Don't use suggestor for comments
+        if (line.startsWith("#")) {
+            suggestor.setWindowActive(false);
+            com.joel4848.commandrunner.mixin.CommandSuggestorAccessor suggestorAccessor =
+                    (com.joel4848.commandrunner.mixin.CommandSuggestorAccessor) suggestor;
+
+            suggestorAccessor.setWindow(null);
+            suggestorAccessor.getMessages().clear();
+            return;
+        }
+
+        // Don't use suggestor for internal syntax
+        if (line.startsWith("!")) {
+            suggestor.setWindowActive(true);
+            com.joel4848.commandrunner.mixin.CommandSuggestorAccessor suggestorAccessor =
+                    (com.joel4848.commandrunner.mixin.CommandSuggestorAccessor) suggestor;
+
+            suggestorAccessor.setWindow(null);
+            return;
+        }
+
+        // Otherwise, plz use suggestor
+        if (line.isEmpty()) {
+            suggestor.setWindowActive(true);
+            resetAnchor();
+            int visLineIdx = activeLine - scrolledLines;
+            int x = getX() + PADDING;
+            int y = getY() + PADDING + (visLineIdx + 1) * LINE_HEIGHT;
+            applySuggestorPos(x, y);
+            return;
+        }
+
         String tokenStart = getTokenStart(line, cursorOffsetInLine(activeLine, accessor.getSelectionStart()));
 
         if (anchorLineSnapshot == null || !isSameTokenContext(line, tokenStart)) {
+            suggestor.setWindowActive(true);
             computeAndSetAnchor(line, tokenStart);
         }
     }
@@ -192,8 +227,18 @@ public class CommandTextField extends TextFieldWidget implements Element {
 
     private void applySuggestorPos(int x, int y) {
         if (suggestor == null) return;
-        suggestor.setPos(x, y);
-        suggestor.refreshRenderPos();
+        try {
+            com.joel4848.commandrunner.mixin.CommandSuggestorAccessor suggestorAccessor =
+                    (com.joel4848.commandrunner.mixin.CommandSuggestorAccessor) suggestor;
+
+            if (suggestorAccessor.getWindow() != null) {
+                com.joel4848.commandrunner.mixin.SuggestionWindowAccessor winAccessor =
+                        (com.joel4848.commandrunner.mixin.SuggestionWindowAccessor) suggestorAccessor.getWindow();
+
+                net.minecraft.client.util.math.Rect2i area = winAccessor.getArea();
+                winAccessor.setArea(new net.minecraft.client.util.math.Rect2i(x, y, area.getWidth(), area.getHeight()));
+            }
+        } catch (Exception ignored) {}
     }
 
     private void rebuildLines(String text) {
@@ -211,15 +256,39 @@ public class CommandTextField extends TextFieldWidget implements Element {
 
         int cursor = accessor.getSelectionStart();
         activeLine = lineIndexForTextIndex(cursor);
-        rebuildColorsForLine(activeLine);
+
+        for (int i = 0; i < lines.size(); i++) {
+            rebuildColorsForLine(i);
+        }
     }
 
     private void rebuildColorsForLine(int lineIdx) {
         if (suggestor == null || lineIdx < 0 || lineIdx >= lines.size()) return;
         String line = lines.get(lineIdx);
+
+        if (line.isEmpty() || line.startsWith("#") || line.startsWith("!") || line.startsWith("//")) {
+            if (lineIdx < lineColors.size()) {
+                lineColors.set(lineIdx, new ArrayList<>());
+            }
+            return;
+        }
+
         String cmd = line.startsWith("/") ? line.substring(1) : line;
         int firstCharIdx = line.startsWith("/") ? 1 : 0;
-        List<Pair<Integer, Integer>> colors = suggestor.getColorsForLine(cmd, 0);
+
+        List<Pair<Integer, Integer>> colors;
+
+        // Fuckery to make inactive lines still have syntax highlighting
+        if (lineIdx == activeLine) {
+            colors = suggestor.getColorsForLine(cmd, 0);
+        } else {
+            colors = suggestor.getIsolatedColorsForLine(line);
+            if (lineIdx < lineColors.size()) {
+                lineColors.set(lineIdx, colors);
+            }
+            return;
+        }
+
         if (firstCharIdx > 0) {
             List<Pair<Integer, Integer>> adjusted = new ArrayList<>();
             for (Pair<Integer, Integer> p : colors) {
@@ -227,6 +296,7 @@ public class CommandTextField extends TextFieldWidget implements Element {
             }
             colors = adjusted;
         }
+
         if (lineIdx < lineColors.size()) {
             lineColors.set(lineIdx, colors);
         }
@@ -254,10 +324,14 @@ public class CommandTextField extends TextFieldWidget implements Element {
         }
         int prevLine = activeLine;
         activeLine = lineIndexForTextIndex(accessor.getSelectionStart());
+
         if (activeLine != prevLine) {
             resetAnchor();
         }
-        rebuildColorsForLine(activeLine);
+
+        for (int i = 0; i < lines.size(); i++) {
+            rebuildColorsForLine(i);
+        }
         notifyChanged(accessor.getText());
         updateScrollForCursor();
     }
@@ -330,11 +404,30 @@ public class CommandTextField extends TextFieldWidget implements Element {
         refreshSuggestorPos();
     }
 
+    private void updateHorizontalScroll(TextRenderer tr) {
+        if (activeLine < 0 || activeLine >= lines.size()) return;
+        String line = lines.get(activeLine);
+        int cursorOffset = cursorOffsetInLine(activeLine, accessor.getSelectionStart());
+        String prefix = line.substring(0, Math.min(cursorOffset, line.length()));
+        int cursorX = tr.getWidth(prefix);
+
+        int maxVisibleWidth = width - (PADDING * 2) - 4;
+
+        if (cursorX - scrollX > maxVisibleWidth) {
+            scrollX = cursorX - maxVisibleWidth;
+        }
+        if (cursorX - scrollX < 0) {
+            scrollX = cursorX;
+        }
+    }
+
     @Override
     public void renderWidget(DrawContext context, int mouseX, int mouseY, float delta) {
         if (!isVisible()) return;
 
         TextRenderer tr = MinecraftClient.getInstance().textRenderer;
+
+        updateHorizontalScroll(tr);
 
         if (accessor.getDrawsBackground()) {
             int borderColor = isFocused() ? -1 : -6250336;
@@ -349,7 +442,8 @@ public class CommandTextField extends TextFieldWidget implements Element {
         boolean cursorVisible = isFocused()
                 && (Util.getMeasuringTimeMs() - accessor.getLastSwitchFocusTime()) / 300L % 2L == 0L;
 
-        context.enableScissor(getX(), getY(), getX() + width, getY() + height);
+        int maxTextWidth = width - SCROLLBAR_WIDTH - 4;
+        context.enableScissor(getX(), getY(), getX() + maxTextWidth, getY() + height);
 
         RenderSystem.enableColorLogicOp();
         RenderSystem.logicOp(GlStateManager.LogicOp.OR_REVERSE);
@@ -360,13 +454,15 @@ public class CommandTextField extends TextFieldWidget implements Element {
             int lineStartIdx = lineStartIndices.get(i);
             int lineEndIdx = lineStartIdx + line.length();
 
-            drawHighlightedLine(context, tr, line, i, getX() + PADDING, lineY);
+            int renderLineX = getX() + PADDING - scrollX;
+            drawHighlightedLine(context, tr, line, i, renderLineX, lineY);
 
             if (cursorVisible && i == activeLine
                     && accessor.getSelectionStart() >= lineStartIdx
                     && accessor.getSelectionStart() <= lineEndIdx) {
                 int cursorOffset = accessor.getSelectionStart() - lineStartIdx;
-                int cx = getX() + PADDING + tr.getWidth(line.substring(0, Math.min(cursorOffset, line.length())));
+
+                int cx = getX() + PADDING - scrollX + tr.getWidth(line.substring(0, Math.min(cursorOffset, line.length())));
                 if (accessor.getSelectionStart() < accessor.getText().length()) {
                     context.fill(cx, lineY - 1, cx + 1, lineY + LINE_HEIGHT, -3092272);
                 } else {
@@ -381,8 +477,8 @@ public class CommandTextField extends TextFieldWidget implements Element {
                 int hlStart = Math.max(selStart, lineStartIdx);
                 int hlEnd = Math.min(selEnd, lineEndIdx);
                 if (hlStart < hlEnd) {
-                    int x1 = getX() + PADDING + tr.getWidth(line.substring(0, hlStart - lineStartIdx));
-                    int x2 = getX() + PADDING + tr.getWidth(line.substring(0, hlEnd - lineStartIdx));
+                    int x1 = getX() + PADDING - scrollX + tr.getWidth(line.substring(0, hlStart - lineStartIdx));
+                    int x2 = getX() + PADDING - scrollX + tr.getWidth(line.substring(0, hlEnd - lineStartIdx));
                     accessor.invokeDrawSelectionHighlight(context, x1, lineY, x2, lineY + LINE_HEIGHT);
                 }
             }
@@ -391,15 +487,39 @@ public class CommandTextField extends TextFieldWidget implements Element {
         RenderSystem.disableColorLogicOp();
         context.disableScissor();
 
+        drawVerticalScrollbar(context);
+
         if (suggestor != null && isFocused()) {
             suggestor.render(context, mouseX, mouseY);
         }
     }
 
+    private void drawVerticalScrollbar(DrawContext context) {
+        int totalLines = lines.size();
+        if (totalLines <= visibleLines) return;
+
+        int x = getX() + width - SCROLLBAR_WIDTH - 2;
+        int topY = getY() + 2;
+        int trackHeight = height - 4;
+
+        int thumbHeight = Math.max(10, (visibleLines * trackHeight) / totalLines);
+        int maxScrollLines = totalLines - visibleLines;
+        int thumbY = topY + (scrolledLines * (trackHeight - thumbHeight)) / maxScrollLines;
+
+        context.fill(x, topY, x + SCROLLBAR_WIDTH, topY + trackHeight, 0xFF222222);
+        context.fill(x, thumbY, x + SCROLLBAR_WIDTH, thumbY + thumbHeight, 0xFF888888);
+    }
+
     private void drawHighlightedLine(DrawContext context, TextRenderer tr, String line, int lineIdx, int x, int y) {
-        if (lineIdx != activeLine || suggestor == null) {
-            int color = (line.isEmpty() || line.startsWith("#")) ? 0xFF888888 : 0xFFFFFFFF;
-            context.drawTextWithShadow(tr, line, x, y, color);
+        // Boring grey colour for comments
+        if (line.isEmpty() || line.startsWith("#")) {
+            context.drawTextWithShadow(tr, line, x, y, 0xFF888888);
+            return;
+        }
+
+        // Nice gold colour for internal syntax
+        if (line.startsWith("!")) {
+            context.drawTextWithShadow(tr, line, x, y, 0xFFFFAA00);
             return;
         }
 
@@ -438,6 +558,38 @@ public class CommandTextField extends TextFieldWidget implements Element {
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (!isActive()) return false;
 
+        int selectionStart = accessor.getSelectionStart();
+        int selectionEnd = accessor.getSelectionEnd();
+        boolean hasSelection = selectionStart != selectionEnd;
+
+        if (hasSelection && (keyCode == 259 || keyCode == 261)) {
+            int start = Math.min(selectionStart, selectionEnd);
+            int end = Math.max(selectionStart, selectionEnd);
+
+            String currentText = getText();
+            String newText = currentText.substring(0, start) + currentText.substring(end);
+
+            setText(newText);
+            setCursor(start, false);
+            return true;
+        }
+
+        if (hasSelection && Screen.isCut(keyCode)) {
+            int start = Math.min(selectionStart, selectionEnd);
+            int end = Math.max(selectionStart, selectionEnd);
+
+            String currentText = getText();
+            String selectedText = currentText.substring(start, end);
+            MinecraftClient.getInstance().keyboard.setClipboard(selectedText);
+
+            if (accessor.getEditable()) {
+                String newText = currentText.substring(0, start) + currentText.substring(end);
+                setText(newText);
+                setCursor(start, false);
+            }
+            return true;
+        }
+
         if (Screen.isSelectAll(keyCode)) {
             setCursorToEnd(Screen.hasShiftDown());
             accessor.setSelectionEnd(0);
@@ -449,11 +601,6 @@ public class CommandTextField extends TextFieldWidget implements Element {
         }
         if (Screen.isPaste(keyCode)) {
             if (accessor.getEditable()) write(MinecraftClient.getInstance().keyboard.getClipboard());
-            return true;
-        }
-        if (Screen.isCut(keyCode)) {
-            MinecraftClient.getInstance().keyboard.setClipboard(getSelectedText());
-            if (accessor.getEditable()) write("");
             return true;
         }
 
@@ -468,13 +615,13 @@ public class CommandTextField extends TextFieldWidget implements Element {
                 else moveCursor(1, Screen.hasShiftDown());
                 yield true;
             }
-            case 264 -> { moveCursorVertical(1); yield true; }
-            case 265 -> { moveCursorVertical(-1); yield true; }
-            case 259 -> { if (accessor.getEditable()) eraseImpl(-1); yield true; }
-            case 261 -> { if (accessor.getEditable()) eraseImpl(1); yield true; }
-            case 268 -> { setCursorToStart(Screen.hasShiftDown()); yield true; }
-            case 269 -> { setCursorToEnd(Screen.hasShiftDown()); yield true; }
-            // Enter / numpad Enter — insert a newline
+            case 264 -> { moveCursorVertical(1); yield true; }  // Down Arrow
+            case 265 -> { moveCursorVertical(-1); yield true; } // Up Arrow
+            case 259 -> { if (accessor.getEditable()) eraseImpl(-1); yield true; } // Backspace
+            case 261 -> { if (accessor.getEditable()) eraseImpl(1); yield true; }  // Delete
+            case 268 -> { setCursorToStart(Screen.hasShiftDown()); yield true; }   // Home
+            case 269 -> { setCursorToEnd(Screen.hasShiftDown()); yield true; }     // End
+            // Enter/Numpad Enter
             case 257, 335 -> {
                 if (accessor.getEditable()) write("\n");
                 yield true;
@@ -499,21 +646,66 @@ public class CommandTextField extends TextFieldWidget implements Element {
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (!isVisible()) return false;
+
+        int scrollbarX = getX() + width - SCROLLBAR_WIDTH - 2;
+        if (button == 0 && mouseX >= scrollbarX && mouseX <= scrollbarX + SCROLLBAR_WIDTH
+                && mouseY >= getY() && mouseY <= getY() + height) {
+            this.isDraggingScrollbar = true;
+            handleScrollbarDrag(mouseY);
+            return true;
+        }
+
+        this.isDraggingScrollbar = false;
+
         boolean hovered = mouseX >= getX() && mouseX < getX() + width
                 && mouseY >= getY() && mouseY < getY() + height;
         if (accessor.getFocusUnlocked()) setFocused(hovered);
+
         if (isFocused() && hovered && button == 0) {
             int clickedLine = scrolledLines + (int) ((mouseY - getY() - PADDING) / LINE_HEIGHT);
             clickedLine = Math.max(0, Math.min(lines.size() - 1, clickedLine));
             String line = clickedLine < lines.size() ? lines.get(clickedLine) : "";
             TextRenderer tr = MinecraftClient.getInstance().textRenderer;
-            String prefix = tr.trimToWidth(line, (int) (mouseX - getX() - PADDING));
+
+            String prefix = tr.trimToWidth(line, (int) (mouseX - getX() - PADDING + scrollX));
             int newCursor = lineStartIndices.get(clickedLine) + prefix.length();
             resetAnchor();
             setCursor(newCursor, Screen.hasShiftDown());
             return true;
         }
         return false;
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        this.isDraggingScrollbar = false;
+        return super.mouseReleased(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseDragged(double mouseX, double mouseY, int button, double deltaX, double deltaY) {
+        if (this.isDraggingScrollbar && button == 0) {
+            handleScrollbarDrag(mouseY);
+            return true;
+        }
+        return super.mouseDragged(mouseX, mouseY, button, deltaX, deltaY);
+    }
+
+    private void handleScrollbarDrag(double mouseY) {
+        int totalLines = lines.size();
+        if (totalLines <= visibleLines) return;
+
+        int topY = getY() + 2;
+        int trackHeight = height - 4;
+        int thumbHeight = Math.max(10, (visibleLines * trackHeight) / totalLines);
+
+        double relativeY = mouseY - topY - (thumbHeight / 2.0);
+        int maxScrollLines = totalLines - visibleLines;
+
+        double percentage = relativeY / (double) (trackHeight - thumbHeight);
+        percentage = Math.max(0.0, Math.min(1.0, percentage));
+
+        this.scrolledLines = (int) Math.round(percentage * maxScrollLines);
     }
 
     @Override
@@ -549,7 +741,9 @@ public class CommandTextField extends TextFieldWidget implements Element {
     }
 
     public void onSuggestorRefreshed() {
-        rebuildColorsForLine(activeLine);
+        for (int i = 0; i < lines.size(); i++) {
+            rebuildColorsForLine(i);
+        }
         updateSuggestorAnchor();
     }
 }

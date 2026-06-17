@@ -1,6 +1,7 @@
 package com.joel4848.commandrunner.mixin;
 
 import com.mojang.brigadier.ParseResults;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.screen.ChatInputSuggestor;
 import net.minecraft.client.gui.screen.Screen;
@@ -17,11 +18,17 @@ import java.util.List;
 @Mixin(ChatInputSuggestor.class)
 public interface CommandSuggestorAccessor {
 
+    @Accessor("client")
+    MinecraftClient getClient();
+
     @Invoker("provideRenderText")
     OrderedText invokeProvideRenderText(String original, int firstCharacterIndex);
 
     @Accessor
     ChatInputSuggestor.SuggestionWindow getWindow();
+
+    @Accessor("window")
+    void setWindow(ChatInputSuggestor.SuggestionWindow window);
 
     @Accessor
     List<OrderedText> getMessages();

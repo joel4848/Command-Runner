@@ -11,6 +11,7 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
+import java.util.List;
 
 public class MainScreen extends Screen {
 
@@ -78,6 +79,9 @@ public class MainScreen extends Screen {
             net.minecraft.client.gui.widget.TextFieldWidget stub =
                     new net.minecraft.client.gui.widget.TextFieldWidget(
                             textRenderer, 0, 0, 1, 1, Text.empty());
+
+            stub.setMaxLength(Integer.MAX_VALUE);
+
             suggestor = new CommandSuggestor(
                     MinecraftClient.getInstance(), this, stub,
                     textRenderer, true, true, 0, 10, false,
@@ -87,11 +91,13 @@ public class MainScreen extends Screen {
             tef.setCommandSuggestor(suggestor);
         }
 
-        if (!preservedText.isEmpty()) {
-            tef.setText(preservedText);
-        } else if (pendingContent != null) {
+        if (pendingContent != null) {
             tef.setText(pendingContent);
             pendingContent = null;
+        } else if (!preservedText.isEmpty()) {
+            tef.setText(preservedText);
+        } else {
+            tef.setText("");
         }
 
         tef.setChangedListener(newText -> {
@@ -149,7 +155,49 @@ public class MainScreen extends Screen {
     // Suggester (NOT 'suggestor' cmon Mojang)
     private void refreshSuggestor() {
         if (suggestor == null || MinecraftClient.getInstance().getNetworkHandler() == null) return;
-        primeSuggestorTextField(tef.getActiveLineRaw());
+        String activeLine = tef.getActiveLineRaw();
+
+        if (activeLine.startsWith("#")) {
+            primeSuggestorTextField("");
+            tef.onSuggestorRefreshed();
+            return;
+        }
+
+        if (activeLine.startsWith("!")) {
+            primeSuggestorTextField("");
+
+            com.joel4848.commandrunner.mixin.CommandSuggestorAccessor suggestorAccessor =
+                    (com.joel4848.commandrunner.mixin.CommandSuggestorAccessor) suggestor;
+
+            List<net.minecraft.text.OrderedText> messages = suggestorAccessor.getMessages();
+            messages.clear();
+
+            suggestorAccessor.setWindow(null);
+
+            String content = activeLine.substring(1).trim().toLowerCase();
+
+            if (content.startsWith("w")) {
+                messages.add(Text.literal("§6!wait §e<time>[t|s|d]§7 (e.g. !wait 20s)").asOrderedText());
+                messages.add(Text.literal("§7Units: t=ticks, s=seconds, d=minecraft days").asOrderedText());
+            } else if (content.startsWith("r")) {
+                messages.add(Text.literal("§6!repeat §e<count>§7 (e.g. !repeat 5)").asOrderedText());
+                messages.add(Text.literal("§7Repeats a block of commands <count> times").asOrderedText());
+            } else if (content.startsWith("e")) {
+                messages.add(Text.literal("§6!endrepeat").asOrderedText());
+                messages.add(Text.literal("§7Closes the nearest active repeat block").asOrderedText());
+            } else {
+                // messages.add(Text.literal("§6Handy-Dandy Internal Syntax:").asOrderedText());
+                messages.add(Text.literal(" §e!wait <time>[t|s|d]").asOrderedText());
+                messages.add(Text.literal(" §e!repeat <count>").asOrderedText());
+                messages.add(Text.literal(" §e!endrepeat").asOrderedText());
+            }
+
+            suggestor.setWindowActive(true);
+            tef.onSuggestorRefreshed();
+            return;
+        }
+
+        primeSuggestorTextField(activeLine);
         suggestor.refresh();
         tef.onSuggestorRefreshed();
     }
@@ -165,7 +213,7 @@ public class MainScreen extends Screen {
         } catch (Exception ignored) {}
     }
 
-    // Input
+    // Inputy bits
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
@@ -248,7 +296,7 @@ public class MainScreen extends Screen {
     private void handleSave() {
         String textToSave = tef.getText();
         if (loadedPresetName == null) {
-            client.setScreen(new SaveAsScreen(this, textToSave, savedName -> {
+            MinecraftClient.getInstance().setScreen(new SaveAsScreen(this, textToSave, savedName -> {
                 this.loadedPresetName = savedName;
                 com.joel4848.commandrunner.schedule.ScheduleManager.reloadSchedules();
             }));
