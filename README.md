@@ -1,8 +1,8 @@
 # Command Runner
 
-Command Runner lets you write or paste in lists of commands to run in bulk, save and load presets, and schedule saved presets to run when various events trigger.
+Command Runner lets you write (with command suggestions/autocomplete!) or paste in lists of commands to run in bulk, save and load presets, and schedule saved presets to run when various events trigger.
 
-There's also command autocomplete - isn't that exciting?!
+![Main Screen](https://raw.githubusercontent.com/joel4848/Command-Runner/refs/heads/main/Screenshots/Main.png)
 
 ## Features
 
